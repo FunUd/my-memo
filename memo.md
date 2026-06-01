@@ -488,4 +488,4 @@ High変更時は以下を確認する。
 
 # その他メモ
 
-* allowed-toolsにbashまたはps指定する
+* allowed-toolsにbashを指定する。スクリプトやパスもbash前提で。ただ、基本的にはどの環境でも使えるPythonスクリプトを使いたい。

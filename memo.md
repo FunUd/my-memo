@@ -483,3 +483,9 @@ High変更時は以下を確認する。
 * build-recovery Skillは自己修復失敗後のみ呼び出す
 * Full Buildは条件該当時のみ実施する
 * 回帰テストは影響範囲内に限定する
+
+---
+
+# その他メモ
+
+* allowed-toolsにbashまたはps指定する

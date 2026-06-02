@@ -8,484 +8,423 @@ flowchart TD
     B -- Yes --> C[ユーザーへ確認]
     C --> A
 
-    B -- No --> D[変更リスク分類]
+    B -- No --> D[classify_change.py 実行]
 
-    D --> E{Full Build条件該当?}
+    D --> E{High検出?}
 
-    E -- Yes --> F[Full Build予定フラグ設定]
-    E -- No --> G[実装]
+    E -- Yes --> F[Risk = High 確定]
+    E -- No --> G[AIが差分確認して Low / Medium 判定]
 
-    F --> G
+    F --> H[full_build_detector.py 実行]
+    G --> H
 
-    G --> H[セルフレビュー]
+    H --> I{Full Build条件該当?}
 
-    H --> I{リスク分類}
+    I -- Yes --> J[Full Build予定フラグ設定]
+    I -- No --> K[実装]
 
-    I -->|Low| J[Incremental Build]
+    J --> K
 
-    I -->|Medium| K[Incremental Build]
-    K --> L[関連Unit Test実行]
-    L --> M{Unit Test成功?}
+    K --> L[セルフレビュー]
 
-    I -->|High| N[影響範囲分析]
-    N --> O[回帰テスト対象抽出]
-    O --> P[関連Unit Test作成・更新]
-    P --> Q[関連Unit Test実行]
-    Q --> R{Unit Test成功?}
+    L --> M{リスク分類}
 
-    M -- No --> S[修正]
-    R -- No --> S
+    M -->|Low| N[build_runner.py incremental]
 
-    S --> T[Incremental Build]
-    T --> U[関連Unit Test実行]
-    U --> V{Unit Test成功?}
+    M -->|Medium| O[test_selector.py]
+    O --> P[関連Unit Test実行]
+    P --> Q[build_runner.py incremental]
 
-    V -- No --> S
+    M -->|High| R[test_selector.py]
+    R --> S[関連Unit Test作成・更新]
+    S --> T[関連Unit Test実行]
+    T --> U[build_runner.py incremental]
 
-    V -- Yes --> W
+    N --> V
+    Q --> V
+    U --> V
 
-    M -- Yes --> W
+    V{Build成功?}
 
-    W[clang-tidy]
+    V -- No --> W[自己修復]
 
-    I -->|Low| J
+    W --> X{復旧成功?}
 
-    W --> X{Highリスクか?}
+    X -- Yes --> Y[品質ゲートへ進む]
+    X -- No --> Z[build-recovery Skill]
 
-    X -- No --> Y{Build成功?}
+    Z --> AA{復旧成功?}
 
-    X -- Yes --> Z[cppcheck]
-    Z --> AA[lizard]
+    AA -- Yes --> Y
+    AA -- No --> AB[ユーザーへ確認]
 
-    AA --> AB{Critical指摘あり?}
+    V -- Yes --> Y
 
-    AB -- Yes --> AC[修正]
-    AC --> AD[Incremental Build]
-    AD --> AE[関連Unit Test実行]
-    AE --> AF[静的解析再実行]
-    AF --> AB
+    Y --> AC{Highリスクか?}
 
-    AB -- No --> AG{High指摘あり?}
+    AC -- No --> AD[品質ゲート合格]
 
-    AG -- Yes --> AH{解析修正回数 < 2 ?}
-    AH -- Yes --> AC
-    AH -- No --> AI[残課題報告]
+    AC -- Yes --> AE[static_analysis.py]
+    AE --> AF{Critical指摘あり?}
 
-    AG -- No --> AJ[品質ゲート合格]
+    AF -- Yes --> AG[修正]
+    AG --> T
 
-    AI --> AJ
+    AF -- No --> AH{High指摘あり?}
 
-    J --> Y
+    AH -- Yes --> AI{解析修正回数 < 2 ?}
+    AI -- Yes --> AG
+    AI -- No --> AJ[残課題報告]
 
-    Y -- No --> AK[自己修復]
+    AH -- No --> AD
+    AJ --> AD
 
-    AK --> AL{修復成功?}
+    AD --> AK{Full Build予定フラグあり?}
 
-    AL -- Yes --> AJ
+    AK -- No --> AL[完了]
 
-    AL -- No --> AM[build-recovery Skill]
+    AK -- Yes --> AM[build_runner.py full]
+    AM --> AN{Build成功?}
 
-    AM --> AN{復旧成功?}
-
-    AN -- Yes --> AJ
-
-    AN -- No --> AO[ユーザーへ確認]
-
-    Y -- Yes --> AJ
-
-    AJ --> AP{Full Build予定フラグあり?}
-
-    AP -- No --> AQ[完了]
-
-    AP -- Yes --> AR[Full Build]
-
-    AR --> AS{Build成功?}
-
-    AS -- Yes --> AQ
-
-    AS -- No --> AK
+    AN -- Yes --> AL
+    AN -- No --> W
 ```
-
----
 
 # 変更リスク分類ルール
 
-実装開始前に変更内容を分析し、Low / Medium / High のいずれかに分類する。
+実装開始前に "classify_change.py" を実行し、変更内容を分析する。
 
-複数の分類に該当する場合は、最も高い分類を採用する。
+このスクリプトは Phase1 / Phase2 の一次判定を行う。
 
----
+- Phase1: パス、ディレクトリ、ファイル種別による判定
+- Phase2: 公開ヘッダ、公開API、共通IF、ビルド設定などの軽量な構造判定
 
-# High
+"high_detected=true" が返った場合は High を確定する。
+
+"high_detected=false" の場合のみ、AI が差分を確認して Low / Medium を判定する。
+
+複数の分類に該当する場合は最も高い分類を採用する。
+
+## High
 
 以下のいずれかに該当する場合。
 
-## アーキテクチャ変更
+### アーキテクチャ変更
 
-* 公開API変更
-* 共通IF変更
-* IPC変更
-* 要求データ構造変更
-* メッセージID変更
-* イベントID変更
-* 状態遷移変更
+- 公開API変更
+- 共通IF変更
+- IPC変更
+- 要求データ構造変更
+- メッセージID変更
+- イベントID変更
+- 状態遷移変更
 
-## 共通基盤変更
+### 共通基盤変更
 
-* 共通ライブラリ変更
-* 共通モジュール変更
-* Driver層変更
-* HAL変更
-* OS抽象化層変更
+- 共通ライブラリ変更
+- 共通モジュール変更
+- Driver層変更
+- HAL変更
+- OS抽象化層変更
 
-## 並列処理・リアルタイム制御
+### 並列処理・リアルタイム制御
 
-* タスク変更
-* スレッド変更
-* Mutex変更
-* Semaphore変更
-* Queue変更
-* Event Flag変更
-* タイマー制御変更
+- タスク変更
+- スレッド変更
+- Mutex変更
+- Semaphore変更
+- Queue変更
+- Event Flag変更
+- タイマー制御変更
 
-## 割込み・DMA
+### 割込み・DMA
 
-* ISR変更
-* 割込みハンドラ変更
-* DMA処理変更
-* DMA通知処理変更
+- ISR変更
+- 割込みハンドラ変更
+- DMA処理変更
+- DMA通知処理変更
 
-## 通信
+### 通信
 
-* UART通信仕様変更
-* SPI通信仕様変更
-* I2C通信仕様変更
-* CAN通信仕様変更
-* Ethernet通信仕様変更
-* USB通信仕様変更
-* TCP/IP通信仕様変更
+- UART通信仕様変更
+- SPI通信仕様変更
+- I2C通信仕様変更
+- CAN通信仕様変更
+- Ethernet通信仕様変更
+- USB通信仕様変更
+- TCP/IP通信仕様変更
 
-## ハードウェア制御
+### ハードウェア制御
 
-* レジスタアクセス変更
-* GPIO制御変更
-* モータ制御変更
-* センサ制御変更
-* 電源制御変更
+- レジスタアクセス変更
+- GPIO制御変更
+- モータ制御変更
+- センサ制御変更
+- 電源制御変更
 
-## 安全性・信頼性
+### 安全性・信頼性
 
-* エラー処理変更
-* フェイルセーフ変更
-* Watchdog変更
-* リカバリ処理変更
+- エラー処理変更
+- フェイルセーフ変更
+- Watchdog変更
+- リカバリ処理変更
 
----
-
-# Medium
+## Medium
 
 Highに該当せず、以下に該当する場合。
 
-## 機能変更
+### 機能変更
 
-* 新規機能追加
-* 既存機能拡張
-* 業務ロジック変更
+- 新規機能追加
+- 既存機能拡張
+- 業務ロジック変更
 
-## 制御ロジック
+### 制御ロジック
 
-* 判定条件変更
-* 分岐追加
-* 計算式変更
+- 判定条件変更
+- 分岐追加
+- 計算式変更
 
-## データ変更
+### データ変更
 
-* 設定値追加
-* パラメータ追加
-* テーブル追加
+- 設定値追加
+- パラメータ追加
+- テーブル追加
 
-## 状態管理
+### 状態管理
 
-* 状態保持変数追加
-* 状態監視処理追加
+- 状態保持変数追加
+- 状態監視処理追加
 
-## モジュール内部変更
+### モジュール内部変更
 
-* 非公開関数追加
-* 非公開関数変更
-* 内部バッファ処理変更
-* 内部メモリ処理変更
+- 非公開関数追加
+- 非公開関数変更
+- 内部バッファ処理変更
+- 内部メモリ処理変更
 
----
-
-# Low
+## Low
 
 動作変更を伴わない、または極めて限定的な変更。
 
-## ドキュメント
+### ドキュメント
 
-* コメント修正
-* README修正
-* 設計書修正
+- コメント修正
+- README修正
+- 設計書修正
 
-## 可読性改善
+### 可読性改善
 
-* リネーム
-* フォーマット修正
-* 不要コード削除
+- リネーム
+- フォーマット修正
+- 不要コード削除
 
-## ログ
+### ログ
 
-* ログ追加
-* ログ文言変更
+- ログ追加
+- ログ文言変更
 
-## UI・表示
+### UI・表示
 
-* メッセージ文言変更
-* 表示名称変更
+- メッセージ文言変更
+- 表示名称変更
 
-## リファクタリング
+### リファクタリング
 
 以下を全て満たす場合のみ。
 
-* 振る舞い変更なし
-* 公開IF変更なし
-* 状態遷移変更なし
-* データ構造変更なし
-
----
+- 振る舞い変更なし
+- 公開IF変更なし
+- 状態遷移変更なし
+- データ構造変更なし
 
 # 品質ゲート
 
-## Low
+品質ゲートの実施内容は、分類結果とスクリプト出力に従う。
 
-実施内容
+AIはコマンドや対象選定を手作業で保持しない。
 
-* セルフレビュー
-* Incremental Build
-
-推奨
-
-* 既存Unit Testが存在する場合は実行
-
----
-
-## Medium
-
-実施内容
-
-* セルフレビュー
-* Incremental Build
-* 関連Unit Test実行
-* clang-tidy
-
----
-
-## High
-
-実施内容
-
-* 影響範囲分析
-* 回帰テスト対象抽出
-* セルフレビュー
-* Incremental Build
-* 関連Unit Test作成・更新
-* 関連Unit Test実行
-* clang-tidy
-* cppcheck
-* lizard
-
-追加確認項目
-
-* 競合状態
-* メモリ破壊
-* リソースリーク
-* 状態遷移整合性
-* イベント整合性
-* メッセージ整合性
-* 回帰影響
-
----
-
-# Unit Testルール
-
-## Medium
-
-既存テストが存在する場合は必ず実行する。
-
-存在しない場合は作成不要。
-
----
-
-## High
-
-以下を実施する。
-
-* 関連Unit Test作成または更新
-* 関連Unit Test実行
-* 回帰テスト実行
-
----
-
-## テスト失敗時
-
-以下を繰り返す。
-
-* 修正
-* Incremental Build
-* Unit Test実行
-
-成功するまで継続する。
-
----
-
-# 静的解析ルール
-
-解析結果を以下の重要度で分類する。
-
-## Critical
-
-必ず修正する。
-
-例
-
-* NULL参照
-* バッファオーバーラン
-* Use After Free
-* デッドロック
-* 未初期化変数
-
----
-
-## High
-
-原則修正する。
-
-例
-
-* メモリリーク
-* 危険なキャスト
-* 競合状態
-
----
-
-## Medium
-
-修正推奨。
-
-例
-
-* 複雑度超過
-* 可読性問題
-
----
+実行系は "build_runner.py"、対象選定は "test_selector.py"、静的解析は "static_analysis.py" に寄せる。
 
 ## Low
 
-修正不要。
+### 実施内容
 
-例
+- セルフレビュー
+- "build_runner.py" による Incremental Build
 
-* 命名規則
-* フォーマット
+### 推奨
 
----
+- 既存Unit Testが存在する場合は実行
 
-# 解析修正ループ
+## Medium
 
-## Critical
+### 実施内容
 
-完了禁止。
-
-必ず修正する。
-
----
+- セルフレビュー
+- "build_runner.py" による Incremental Build
+- "test_selector.py" が返した関連Unit Testの実行
+- clang-tidy
 
 ## High
 
-修正後に以下を再実施する。
+### 実施内容
 
-* Incremental Build
-* 関連Unit Test
-* 静的解析
+- "test_selector.py" による関連Unit Test候補抽出
+- 関連Unit Test作成・更新
+- 関連Unit Test実行
+- セルフレビュー
+- "build_runner.py" による Incremental Build
+- "static_analysis.py" による clang-tidy
+- "static_analysis.py" による cppcheck
+- "static_analysis.py" による lizard
 
-最大2回まで繰り返す。
+### 追加確認項目
 
-残存する場合は課題として報告する。
+- 競合状態
+- メモリ破壊
+- リソースリーク
+- 状態遷移整合性
+- イベント整合性
+- メッセージ整合性
+- 回帰影響
 
----
+# 自動化スクリプト
 
-## Medium / Low
+## classify_change.py
 
-報告のみ。
+変更内容を分析し、リスク分類の一次判定を行う。
 
-修正ループ対象外。
+### 判定方針
 
----
+- Phase1: パス、ディレクトリ、ファイル種別による判定
+- Phase2: 公開ヘッダ、公開API、共通IF、ビルド設定などの軽量な構造判定
 
-# Build失敗時
+### 出力例
 
-## 1回目
+```json
+{
+  "high_detected": true,
+  "full_build_required": true,
+  "reasons": [
+    "public_api_changed",
+    "common_module_changed"
+  ]
+}
+```
 
-* 自己修復
+### 要件
 
-## 2回目
+- "high_detected=true" の場合は High を確定する
+- "high_detected=false" の場合のみ AI が差分を確認して Low / Medium を判定する
+- AI は分類ルール本文を毎回再読しない
 
-* build-recovery Skill
+## full_build_detector.py
 
-## 3回目
+Full Build の要否を判定する。
 
-* 作業停止
-* ユーザーへ確認依頼
+### 出力例
 
----
+```json
+{
+  "full_build_required": true
+}
+```
 
-# Full Build実施条件
+### 判定対象
 
-以下のいずれかに該当する場合。
+- 共通モジュール変更
+- 共通ライブラリ変更
+- 公開API変更
+- 共通IF変更
+- メッセージID変更
+- イベントID変更
+- 要求データ構造変更
+- IPC変更
+- ビルド設定変更
+- 複数モジュール変更
 
-* 共通モジュール変更
-* 共通ライブラリ変更
-* 公開API変更
-* 共通IF変更
-* メッセージID変更
-* イベントID変更
-* 要求データ構造変更
-* IPC変更
-* ビルド設定変更
-* 複数モジュール変更
+## build_runner.py
 
----
+Incremental Build と Full Build を統一実行する。
 
-# 回帰テスト対象抽出ルール
+### サポートするモード
 
-High変更時は以下を確認する。
+- incremental
+- full
 
-* 呼び出し元モジュール
-* 呼び出し先モジュール
-* 共通モジュール利用箇所
-* 関連状態遷移
-* 関連イベント
-* 関連メッセージ
+### 出力例
 
-影響範囲に含まれる既存テストを回帰対象とする。
+```json
+{
+  "success": true,
+  "errors": []
+}
+```
 
----
+## test_selector.py
+
+変更内容から関連Unit Testを抽出する。
+
+### 出力例
+
+```json
+{
+  "tests": [
+    "test_print",
+    "test_job_manager"
+  ]
+}
+```
+
+## static_analysis.py
+
+静的解析を実行し、結果を集約する。
+
+### 実行対象
+
+- clang-tidy
+- cppcheck
+- lizard
+
+### 出力例
+
+```json
+{
+  "critical": [],
+  "high": [],
+  "medium": [],
+  "low": []
+}
+```
 
 # トークン節約ルール
 
-* 既読ファイルを再読しない
-* 必要時は差分のみ取得する
-* 影響範囲外ファイルを読まない
-* 品質ゲートはリスク分類結果に従う
-* High以外では重い解析を実施しない
-* Medium / Low指摘は修正ループ対象外
-* build-recovery Skillは自己修復失敗後のみ呼び出す
-* Full Buildは条件該当時のみ実施する
-* 回帰テストは影響範囲内に限定する
+- 既読ファイルを再読しない
+- 必要時は差分のみ取得する
+- 影響範囲外ファイルを読まない
+- 品質ゲートはリスク分類結果に従う
+- High以外では重い解析を実施しない
+- Medium / Low指摘は修正ループ対象外
+- build-recovery Skillは自己修復失敗後のみ呼び出す
+- Full Buildは条件該当時のみ実施する
+- 回帰テストは影響範囲内に限定する
+- AIは分類・選定・実行の定型処理をスクリプトへ委譲する
+- AIは生ログを保持せず、スクリプト出力の要約のみを扱う
+- "high_detected=false" のときだけ AI が差分確認を行う
 
----
+# スクリプト運用方針
+
+- "allowed-tools" に bash を指定する
+- 実行ラッパーは bash 前提で呼べるようにする
+- 実装は環境依存を抑えた Python スクリプトを基本とする
+- 入力は JSON または YAML に統一する
+- 出力は JSON に統一する
 
 # その他メモ
 
-* allowed-toolsにbashを指定する。スクリプトやパスもbash前提で。ただ、基本的にはどの環境でも使えるPythonスクリプトを使いたい。
+- リスク分類ルールや Full Build 条件は Python 側の設定ファイルへ切り出してよい
+- 変更しやすさを優先し、細かな判定文言を Skill 本文へ埋め込みすぎない
+- AIは「何を実施するか」の最終判断だけを持ち、個別判定ロジックはスクリプトへ寄せる
+- Phase1 / Phase2 で High を検出したものは、そのまま High とする
+- Phase1 / Phase2 で High が出ないもののみ、AI が差分を見て Low / Medium を判断する
